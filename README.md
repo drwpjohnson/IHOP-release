@@ -3,7 +3,7 @@
 **Code, data, and methods records for:**
 Johnson, W. P., et al. (2026). *[manuscript title]*. Submitted to *Water Resources Research*.
 
-**Archival copy:** Zenodo, DOI `10.5281/zenodo.XXXXXXX` *(reserved; to be updated at publication)*
+**Archival copy:** Zenodo, [https://doi.org/10.5281/zenodo.22715530](https://doi.org/10.5281/zenodo.22715530)
 **This repository:** the same deposit, browsable, tagged `v1.0-wrr-submission` at the state deposited to Zenodo.
 
 ---
@@ -67,6 +67,10 @@ The chain, in dependency order:
 | 8 | `python check_consistency.py` | re-derives every headline number from the artefact that owns it and greps the tree for superseded values asserted as current |
 
 `Records/` documents each step's method, the decisions behind it, and the numbers it is expected to reproduce.
+
+### Applying the model to other data
+
+This is a reproducer chain, not a packaged model with a single entry point. The engine lives inside the fitting loop of `unfav_master_fit.py`, which reads the tidy CSV format described in `Records/data_inventory.md` (one row per BTEC or RP point, with column metadata). To fit IHOP to other column experiments, either write your data into that format or adapt the loader at the top of `unfav_master_fit.py`; the data conventions that matter — replicate handling, the RP-branch window, C₀ normalisation, the plateau and tail definitions — are documented in `Records/` and in the script docstrings, and should be read before changing them. Forward simulation with fixed parameters is the same engine without the optimiser; `HYDEQ/hydrus_targets.py` shows the pattern.
 
 ### Two things to know before running
 
