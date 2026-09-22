@@ -46,6 +46,15 @@ Workbook (UnfavorableMaster.xlsx):
     all its columns (both studies and all replicates), so data and model overlay like the diagnostic figure.
 
 Run from Code/ with the cleaned CSV in ../Data/ (see extract_tidy_data.py). Canonical data description: Records/data_inventory.md.
+
+Usage (added 2026-09-22, after a re-user's assistant silently rewrote the engine -- see README):
+    python3 unfav_master_fit.py                       # full fit, writes ../Manuscript/FigsExcelsUnfav/UnfavorableMaster.xlsx
+    python3 unfav_master_fit.py --check               # GOLDEN-VALUE CHECK: refit 3 published columns, compare to the archived
+                                                      #   master, exit 1 on mismatch. RUN THIS BEFORE AND AFTER ANY EDIT.
+    python3 unfav_master_fit.py --csv my.csv --allow-small-csv --out my_master.xlsx --nin-peaked 4
+                                                      # fit a different dataset in the same tidy-CSV format (see README,
+                                                      #   "Applying the model to other data"); the guard on the shared
+                                                      #   master path is relaxed only when you say so.
 """
 import csv, numpy as np, collections, warnings, functools
 warnings.filterwarnings("ignore"); print=functools.partial(print,flush=True)
@@ -54,7 +63,17 @@ from scipy.sparse import diags, csc_matrix
 from scipy.sparse.linalg import splu
 from scipy.optimize import least_squares
 import openpyxl; from openpyxl.styles import Font
-CSV="../Data/LiTong_experimental_data_tidy.csv"
+import argparse, os, sys
+_ap=argparse.ArgumentParser(description="IHOP (Serial-3) fit of every unfavorable column in the tidy CSV. See module docstring.")
+_ap.add_argument("--csv",default="../Data/LiTong_experimental_data_tidy.csv",help="tidy CSV (one row per BTEC/RP point; format: Records/data_inventory.md)")
+_ap.add_argument("--allow-small-csv",action="store_true",help="relax the >=1200-row / both-studies guard, which exists to protect THIS project's shared master file (see below). Required for any other dataset.")
+_ap.add_argument("--out",default="../Manuscript/FigsExcelsUnfav/UnfavorableMaster.xlsx",help="output workbook")
+_ap.add_argument("--nin-peaked",type=int,default=4,help="inlet points scored on a PEAKED profile; 4 is specific to the 10-point / 2 cm grid (see sl()). Re-derive for another grid.")
+_ap.add_argument("--check",nargs="?",const="Li.R,Li.AE,Tong.R",metavar="STUDY.COL,...",
+                 help="golden-value check: refit only these columns (default Li.R,Li.AE,Tong.R -- a multiexponential glass, a peaked quartz, and the non-detect-bearing quartz column), compare to --master, write nothing, exit 1 on mismatch")
+_ap.add_argument("--master",default="../Manuscript/FigsExcelsUnfav/UnfavorableMaster.xlsx",help="archived master to compare against in --check")
+args=_ap.parse_args()
+CSV=args.csv
 DAY=86400.; L=0.2; REV,T0,Vref=22.801836559387397,3.58,0.1667; INJPV=T0/(L/Vref)
 KR_MED={"glass":5.58e-5,"quartz":1.87e-5}  # MULTISTART SEED ONLY (k_r is fitted free); values superseded by 3.75e-5/1.82e-5 -- deliberately NOT refreshed, since changing a seed perturbs every converged fit for no gain
 THETA={"glass":0.375,"quartz":0.36}
@@ -113,7 +132,7 @@ class Eng:
         #   not a real change.
         rp=(Y[3,:]/ti);m=(tp>0.5*INJPV)&(tp<INJPV)
         return dict(tp=tp,C=np.maximum(C,1e-300),x=x,rp=np.maximum(rp,1e-300),plat=float(C[m].mean()))
-NIN_PEAKED=4  # inlet points used to SCORE a peaked profile -- see Records/plateau_rs_decision.md s6
+NIN_PEAKED=args.nin_peaked  # inlet points used to SCORE a peaked profile (default 4) -- see Records/plateau_rs_decision.md s6
 def sl(x,y,nin=None):
     """Inlet and outlet RP log-slopes.  nin=None -> the historical half-split (non-peaking profiles).
     nin=k     -> inlet regressed over the first k points, outlet over the remainder (peaked profiles).
@@ -152,9 +171,14 @@ rows=list(csv.DictReader(open(CSV)))
 # instead of fitting a partial dataset in silence. A genuinely smaller, deliberate working set belongs
 # under its own filename, never this shared path.
 _srcs=set(r['source'] for r in rows)
-assert len(rows)>=1200 and 'Li' in _srcs and 'Tong' in _srcs, (
-    f"CSV at {CSV!r} looks like a subset ({len(rows)} rows, sources={_srcs}), not the full master "
-    "(~1529 rows, both Li and Tong) -- refusing to fit a silently-truncated dataset.")
+if not (len(rows)>=1200 and 'Li' in _srcs and 'Tong' in _srcs):
+    _msg=(f"CSV at {CSV!r} has {len(rows)} rows, sources={sorted(_srcs)}. This project's master has ~1529 rows from both "
+          "'Li' and 'Tong'; a smaller or single-source file at the shared path once meant the master had been silently "
+          "overwritten by a working subset (2026-08-29, Records/CLAUDE.md), so the default is to refuse. "
+          "If this is deliberately a DIFFERENT dataset in the same tidy format, re-run with --allow-small-csv "
+          "(and give it its own --out path).")
+    if args.allow_small_csv: print("NOTE: CSV guard relaxed by --allow-small-csv. "+_msg)
+    else: sys.exit("GUARD: "+_msg)
 cols=collections.defaultdict(lambda:{"BTEC":[],"RP":[]}); meta={}
 # BTEC_ND (added to the CSV 2026-08-28, task #32, wired in here 2026-09-01): non-detect tail points, real
 # PV, value = the already-substituted 0.5*QL = 5e-6 floor (log10 -5.301). Merged straight into the BTEC
@@ -218,6 +242,16 @@ def fit_col(k,nin_override='auto'):
                 branch=branch,nin=(nin if nin else 0),pk_m=pk_m,pk_d=pk_d,**blk)
 # ---- fit all unfavorable (drop IS<=1 mM: retention gradient below model resolution, W.P.J.) ----
 unf=[k for k,mm in meta.items() if mm['chem']=='unfavorable' and not (mm['IS'] is not None and mm['IS']<=1.0)]
+CHECK=None
+if args.check:
+    want=[tuple(t.strip().split(".",1)) for t in args.check.split(",") if t.strip()]
+    CHECK=[k for k in unf if (k[0],k[2]) in want]
+    missing=[w for w in want if not any((k[0],k[2])==w for k in CHECK)]
+    if missing: sys.exit(f"--check: columns not found among fittable unfavorable columns: {missing}")
+    # keep every column of each checked column's CONDITION so the branch majority vote is unchanged
+    _keys={(k[0],meta[k]['medium'],meta[k]['size'],meta[k]['vel'],meta[k]['IS']) for k in CHECK}
+    unf=[k for k in unf if (k[0],meta[k]['medium'],meta[k]['size'],meta[k]['vel'],meta[k]['IS']) in _keys]
+    print(f"--check: refitting {[f'{k[0]}.{k[2]}' for k in CHECK]} (conditions kept whole for the branch vote: {len(unf)} columns)")
 # PASS 1 -- classify every column from its first two RP points (no fitting)
 colbr={}
 for k in unf:
@@ -240,6 +274,37 @@ for k in unf:
     v=fit_col(k,nin_override=nin)
     if v: v['cond_branch']=cbr[key]; res[k]=v
 print(f"fitted {len(res)}/{len(unf)} unfavorable columns")
+# ================= --check: compare to the archived master and stop =================
+if CHECK is not None:
+    """GOLDEN-VALUE CHECK (2026-09-22). Compares this engine's fit of a few published columns with the archived
+    'Per-column fits' sheet (values rounded to 4 dp there, so fresh values are rounded the same way first).
+    Tolerances: 0.02 dex on alpha_s/alpha_m/f_x, 0.005 on RP RMS and shelf+tail RMS,
+    branch label exact. k_r is NOT compared: it sits in the {f_x, v_ns, k_r} degeneracy and can move decades at
+    unchanged cost (Records/CLAUDE.md). A rewritten engine, a changed objective, or a reintroduced retention-
+    profile convention shows up here as a dex-scale shift; solver/platform noise does not."""
+    TOL_DEX,TOL_RMS=0.02,0.005
+    mws=openpyxl.load_workbook(args.master,data_only=True)["Per-column fits"]
+    H=[c.value for c in mws[1]]; ref={}
+    for row in mws.iter_rows(min_row=2,values_only=True):
+        if row and row[0] in ("Li","Tong"): ref[(row[0],row[1])]=dict(zip(H,row))
+    bad=0
+    for k in CHECK:
+        d=res.get(k); m=ref.get((k[0],k[2]))
+        if d is None or m is None: print(f"  {k[0]}.{k[2]}: MISSING ({'fit' if d is None else 'master row'})"); bad+=1; continue
+        dex=lambda a,b: abs(np.log10(max(round(a,4),1e-300))-np.log10(max(b,1e-300)))   # master stores 4 dp; compare at that precision
+        rows_=[("alpha_s",d['a_s'],m['alpha_s'],dex(d['a_s'],m['alpha_s']),TOL_DEX,"dex"),
+               ("alpha_m",d['a_m'],m['alpha_m'],dex(d['a_m'],m['alpha_m']),TOL_DEX,"dex"),
+               ("f_x",d['fx'],m['f_x'],dex(d['fx'],m['f_x']),TOL_DEX,"dex"),
+               ("RP RMS",d['rpRMS'],m['RP RMS (log)'],abs(d['rpRMS']-m['RP RMS (log)']),TOL_RMS,"abs"),
+               ("shelf+tail RMS",d['btRMS'],m['shelf+tail RMS (log)'],abs(d['btRMS']-m['shelf+tail RMS (log)']),TOL_RMS,"abs")]
+        okb=(d['branch']==m['branch (this column)'])
+        print(f"  {k[0]}.{k[2]} ({meta[k]['medium']} {meta[k]['size']} um, {meta[k]['vel']:.0f} m/d, {meta[k]['IS']:.0f} mM)  branch {d['branch']} vs {m['branch (this column)']} {'OK' if okb else 'MISMATCH'}")
+        if not okb: bad+=1
+        for nm,a,b,diff,tol,unit in rows_:
+            ok=diff<=tol; bad+=(not ok)
+            print(f"      {nm:15s} now {a:9.4g}  master {b:9.4g}  diff {diff:.4f} {unit}  {'OK' if ok else 'MISMATCH'}")
+    if bad: sys.exit(f"CHECK FAILED: {bad} mismatch(es). The engine or objective no longer reproduces the archived fits -- do not proceed until you understand why.")
+    print("CHECK PASSED: this engine reproduces the archived fits within tolerance."); sys.exit(0)
 # ================= workbook =================
 Bf=Font(bold=True); IT=Font(italic=True)
 wb=openpyxl.Workbook(); wb.remove(wb.active)
@@ -349,5 +414,5 @@ for cond in sorted(bycond, key=lambda t:(t[0],t[1],t[2],(t[3] or 0))):
     end=block(ws,3,"BTEC","bt_exp","bt_fit",ks,"pore volumes","log10 C/C0")
     block(ws,end+3,"RP (retention profile)","rp_exp","rp_fit",ks,"distance (m)","log10 spheres")
     for col in [openpyxl.utils.get_column_letter(i) for i in range(1,30)]: ws.column_dimensions[col].width=11
-wb.save("../Manuscript/FigsExcelsUnfav/UnfavorableMaster.xlsx")
-print(f"wrote UnfavorableMaster.xlsx : Master table ({len(byrow)} rows), Per-column fits ({len(percol)}), {len(bycond)} condition sheets")
+os.makedirs(os.path.dirname(os.path.abspath(args.out)),exist_ok=True); wb.save(args.out)
+print(f"wrote {args.out} : Master table ({len(byrow)} rows), Per-column fits ({len(percol)}), {len(bycond)} condition sheets")
