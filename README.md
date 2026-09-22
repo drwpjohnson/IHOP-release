@@ -70,7 +70,15 @@ The chain, in dependency order:
 
 ### Applying the model to other data
 
-This is a reproducer chain, not a packaged model with a single entry point. The engine lives inside the fitting loop of `unfav_master_fit.py`, which reads the tidy CSV format described in `Records/data_inventory.md` (one row per BTEC or RP point, with column metadata). To fit IHOP to other column experiments, either write your data into that format or adapt the loader at the top of `unfav_master_fit.py`; the data conventions that matter — replicate handling, the RP-branch window, C₀ normalisation, the plateau and tail definitions — are documented in `Records/` and in the script docstrings, and should be read before changing them. Forward simulation with fixed parameters is the same engine without the optimiser; `HYDEQ/hydrus_targets.py` shows the pattern.
+This deposit is a reproducer chain for the paper, not a package. The IHOP engine and its data conventions live in unfav_master_fit.py, and every number in the paper comes from running the scripts here as they are. To fit IHOP to other column experiments, write your data into the tidy-CSV format described in Records/data_inventory.md (one row per BTEC or RP point, with column metadata) or adapt the loader at the top of unfav_master_fit.py. Do not re-derive the model from the paper or rewrite the fitting engine. In particular:
+
+The retention profile is the accumulated solid phase at excision (all attached colloids at the end of the 10 PV run). An earlier convention, an injection-window snapshot, is retired and must not be reintroduced; the favorable-condition script favorable_both_models.py still uses it for reasons documented in Records/plateau_rs_decision.md §3b, and is not a template for new fits.
+
+The objective, weights, RP-shape window rule, C₀ handling, plateau tolerance and detection floor are method choices, recorded with their reasons in Records/. Change them only deliberately, and say so in your own record.
+
+Two load-time checks protect this dataset — the tidy CSV must have ≥ 1,200 rows from both source studies, and every RP must have exactly 10 depth points. They exist because both conditions were once silently violated here (Records/CLAUDE.md). For a different dataset they will fail by design; relax them in the loader knowingly rather than working around them.
+
+If you are using an AI assistant to do the adaptation, give it this section and Records/CLAUDE.md before it touches a file, and have it confirm that a refit of two or three of the published columns reproduces the values in Manuscript/FigsExcelsUnfav/UnfavorableMaster.xlsx before and after its changes. A rewritten engine that runs without error is the failure mode to guard against, not a crash.
 
 ### Two things to know before running
 
